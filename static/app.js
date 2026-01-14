@@ -1,10 +1,19 @@
 async function search() {
-  const q = document.getElementById("query").value;
-  const res = await fetch(`/api/search?q=${q}`);
+async function search() {
+  const q = document.getElementById("query").value.trim();
+  if (!q) return;
+
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
   const data = await res.json();
 
-  document.getElementById("results").innerHTML = "";
+  const results = document.getElementById("results");
+  results.innerHTML = "";
   document.getElementById("player").innerHTML = "";
+
+  if (data.length === 0) {
+    results.innerHTML = "<p>No results found</p>";
+    return;
+  }
 
   data.forEach(song => {
     const div = document.createElement("div");
@@ -12,10 +21,10 @@ async function search() {
     div.innerHTML = `
       <img src="${song.thumbnail}">
       <b>${song.title}</b><br>
-      ${song.artist}
+      ${song.artist || ""}
     `;
     div.onclick = () => playSong(song.id);
-    document.getElementById("results").appendChild(div);
+    results.appendChild(div);
   });
 }
 
