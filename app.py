@@ -44,21 +44,39 @@ def home():
 def search():
     q = request.args.get("q")
     if not q:
-        return jsonify({"error": "query required"}), 400
+        return jsonify([])
 
-    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
-        info = ydl.extract_info(f"ytsearch10:{q}", download=False)
+    ydl_opts = {
+        **YTDL_BASE,
+        "skip_download": True
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(
+            f"ytsearch10:{q}",
+            download=False
+        )
 
     results = []
-    for v in info["entries"]:
+
+    for v in info.get("entries", []):
         if not v:
             continue
+
+        # ✅ STRICT FILTER (THIS FIXES ERROR)
+        if v.get("_type") != "video":
+            continue
+        if not v.get("id"):
+            continue
+        if len(v["id"]) < 8:
+            continue
+
         results.append({
             "id": v["id"],
-            "title": v["title"],
-            "artist": v.get("artist") or v.get("uploader"),
-            "thumbnail": v["thumbnail"],
-            "duration": v["duration"]
+            "title": v.get("title"),
+            "artist": v.get("uploader"),
+            "thumbnail": v.get("thumbnail"),
+            "duration": v.get("duration"),
         })
 
     return jsonify(results)
@@ -66,19 +84,30 @@ def search():
 # 🎧 STREAM (FAST – NO DOWNLOAD)
 @app.route("/api/stream/<vid>")
 def stream(vid):
+    if len(vid) < 8:
+        return jsonify({"error": "invalid video id"}), 400
+
     with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
-        info = ydl.extract_info(vid, download=False)
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={vid}",
+            download=False
+        )
 
-    for f in info["formats"]:
-        if f.get("acodec") != "none":
-            return jsonify({
-                "stream_url": f["url"],
-                "title": info["title"],
-                "artist": info.get("artist") or info.get("uploader"),
-                "thumbnail": info["thumbnail"]
-            })
+    audio_url = None
+    for f in info.get("formats", []):
+        if f.get("acodec") != "none" and f.get("vcodec") == "none":
+            audio_url = f.get("url")
+            break
 
-    return jsonify({"error": "audio not found"}), 404
+    if not audio_url:
+        return jsonify({"error": "audio not found"}), 404
+
+    return jsonify({
+        "stream_url": audio_url,
+        "title": info.get("title"),
+        "artist": info.get("uploader"),
+        "thumbnail": info.get("thumbnail")
+    })
 
 # ⬇️ DOWNLOAD WITH QUALITY
 @app.route("/api/download/<vid>")
