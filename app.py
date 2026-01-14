@@ -1,13 +1,26 @@
 import os, time, threading
-import yt_dlp
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
+import yt_dlp
 
 app = Flask(__name__)
 CORS(app)
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# 🔐 yt-dlp BASE (Cookies + fallback)
+YTDL_BASE = {
+    "quiet": True,
+    "cookiefile": "cookies.txt",
+    "nocheckcertificate": True,
+    "ignoreerrors": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android"]
+        }
+    }
+}
 
 QUALITY_MAP = {
     "low": "64",
@@ -26,30 +39,34 @@ def auto_delete(path, delay=1200):
 def home():
     return render_template("index.html")
 
-# 🔍 Search
+# 🔍 SEARCH (MULTIPLE RESULTS)
 @app.route("/api/search")
 def search():
     q = request.args.get("q")
     if not q:
         return jsonify({"error": "query required"}), 400
 
-    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{q}", download=False)
-        v = info["entries"][0]
+    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
+        info = ydl.extract_info(f"ytsearch10:{q}", download=False)
 
-    return jsonify({
-        "id": v["id"],
-        "title": v["title"],
-        "artist": v.get("artist") or v.get("uploader"),
-        "thumbnail": v["thumbnail"],
-        "duration": v["duration"],
-        "description": v.get("description", "")
-    })
+    results = []
+    for v in info["entries"]:
+        if not v:
+            continue
+        results.append({
+            "id": v["id"],
+            "title": v["title"],
+            "artist": v.get("artist") or v.get("uploader"),
+            "thumbnail": v["thumbnail"],
+            "duration": v["duration"]
+        })
 
-# 🎧 Stream
+    return jsonify(results)
+
+# 🎧 STREAM (FAST – NO DOWNLOAD)
 @app.route("/api/stream/<vid>")
 def stream(vid):
-    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
         info = ydl.extract_info(vid, download=False)
 
     for f in info["formats"]:
@@ -63,18 +80,18 @@ def stream(vid):
 
     return jsonify({"error": "audio not found"}), 404
 
-# ⬇️ Download with Quality
+# ⬇️ DOWNLOAD WITH QUALITY
 @app.route("/api/download/<vid>")
 def download(vid):
     quality = request.args.get("quality", "medium")
     bitrate = QUALITY_MAP.get(quality, "128")
 
-    file_path = f"{DOWNLOAD_DIR}/{vid}_{bitrate}.mp3"
+    path = f"{DOWNLOAD_DIR}/{vid}_{bitrate}.mp3"
 
     ydl_opts = {
+        **YTDL_BASE,
         "format": "bestaudio",
-        "outtmpl": file_path,
-        "quiet": True,
+        "outtmpl": path,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -85,8 +102,19 @@ def download(vid):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([vid])
 
-    threading.Thread(target=auto_delete, args=(file_path,)).start()
-    return send_file(file_path, as_attachment=True)
+    threading.Thread(target=auto_delete, args=(path,)).start()
+    return send_file(path, as_attachment=True)
+
+# 📜 LYRICS (FROM DESCRIPTION)
+@app.route("/api/lyrics/<vid>")
+def lyrics(vid):
+    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
+        info = ydl.extract_info(vid, download=False)
+
+    return jsonify({
+        "title": info["title"],
+        "lyrics": info.get("description", "")[:4000]
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
