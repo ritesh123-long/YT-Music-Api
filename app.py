@@ -82,32 +82,43 @@ def search():
     return jsonify(results)
 
 # 🎧 STREAM (FAST – NO DOWNLOAD)
-@app.route("/api/stream/<vid>")
-def stream(vid):
-    if len(vid) < 8:
-        return jsonify({"error": "invalid video id"}), 400
+@app.route("/api/search")
+def search():
+    q = request.args.get("q")
+    if not q:
+        return jsonify([])
 
-    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
-        info = ydl.extract_info(
-            f"https://www.youtube.com/watch?v={vid}",
-            download=False
-        )
+    search_url = f"https://music.youtube.com/search?q={q.replace(' ', '+')}"
 
-    audio_url = None
-    for f in info.get("formats", []):
-        if f.get("acodec") != "none" and f.get("vcodec") == "none":
-            audio_url = f.get("url")
-            break
+    ydl_opts = {
+        **YTDL_BASE,
+        "extract_flat": True,
+        "skip_download": True,
+    }
 
-    if not audio_url:
-        return jsonify({"error": "audio not found"}), 404
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(search_url, download=False)
 
-    return jsonify({
-        "stream_url": audio_url,
-        "title": info.get("title"),
-        "artist": info.get("uploader"),
-        "thumbnail": info.get("thumbnail")
-    })
+    results = []
+
+    for v in info.get("entries", []):
+        if not v:
+            continue
+        if v.get("_type") != "url":
+            continue
+        if "watch?v=" not in v.get("url", ""):
+            continue
+
+        vid = v["url"].split("watch?v=")[-1]
+
+        results.append({
+            "id": vid,
+            "title": v.get("title"),
+            "artist": v.get("uploader"),
+            "thumbnail": v.get("thumbnails", [{}])[-1].get("url"),
+        })
+
+    return jsonify(results[:10])
 
 # ⬇️ DOWNLOAD WITH QUALITY
 @app.route("/api/download/<vid>")
