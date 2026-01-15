@@ -6,10 +6,12 @@ import yt_dlp
 app = Flask(__name__)
 CORS(app)
 
+# =====================
+# CONFIG
+# =====================
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# 🔐 yt-dlp BASE (Cookies + fallback)
 YTDL_BASE = {
     "quiet": True,
     "cookiefile": "cookies.txt",
@@ -29,33 +31,38 @@ QUALITY_MAP = {
     "veryhigh": "320"
 }
 
-# 🧹 Auto delete after 20 minutes
+# =====================
+# UTILS
+# =====================
 def auto_delete(path, delay=1200):
     time.sleep(delay)
     if os.path.exists(path):
         os.remove(path)
 
+# =====================
+# ROUTES
+# =====================
+
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return "YouTube Music API Running"
 
-# 🔍 SEARCH (MULTIPLE RESULTS)
-@app.route("/api/search")
+# ---------- SEARCH (FIXED & SAFE) ----------
 @app.route("/api/search")
 def search():
-    q = request.args.get("q")
+    q = request.args.get("q", "").strip()
     if not q:
         return jsonify([])
 
     search_url = f"https://music.youtube.com/search?q={q.replace(' ', '+')}"
 
-    ydl_opts = {
+    opts = {
         **YTDL_BASE,
         "extract_flat": True,
         "skip_download": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(search_url, download=False)
 
     results = []
@@ -65,10 +72,11 @@ def search():
             continue
         if v.get("_type") != "url":
             continue
-        if "watch?v=" not in v.get("url", ""):
+        url = v.get("url", "")
+        if "watch?v=" not in url:
             continue
 
-        vid = v["url"].split("watch?v=")[-1]
+        vid = url.split("watch?v=")[-1]
 
         results.append({
             "id": vid,
@@ -79,46 +87,35 @@ def search():
 
     return jsonify(results[:10])
 
-# 🎧 STREAM (FAST – NO DOWNLOAD)
-@app.route("/api/search")
-def search():
-    q = request.args.get("q")
-    if not q:
-        return jsonify([])
+# ---------- STREAM ----------
+@app.route("/api/stream/<vid>")
+def stream(vid):
+    if len(vid) < 8:
+        return jsonify({"error": "invalid id"}), 400
 
-    search_url = f"https://music.youtube.com/search?q={q.replace(' ', '+')}"
+    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={vid}",
+            download=False
+        )
 
-    ydl_opts = {
-        **YTDL_BASE,
-        "extract_flat": True,
-        "skip_download": True,
-    }
+    audio_url = None
+    for f in info.get("formats", []):
+        if f.get("acodec") != "none" and f.get("vcodec") == "none":
+            audio_url = f.get("url")
+            break
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(search_url, download=False)
+    if not audio_url:
+        return jsonify({"error": "audio not found"}), 404
 
-    results = []
+    return jsonify({
+        "stream_url": audio_url,
+        "title": info.get("title"),
+        "artist": info.get("uploader"),
+        "thumbnail": info.get("thumbnail")
+    })
 
-    for v in info.get("entries", []):
-        if not v:
-            continue
-        if v.get("_type") != "url":
-            continue
-        if "watch?v=" not in v.get("url", ""):
-            continue
-
-        vid = v["url"].split("watch?v=")[-1]
-
-        results.append({
-            "id": vid,
-            "title": v.get("title"),
-            "artist": v.get("uploader"),
-            "thumbnail": v.get("thumbnails", [{}])[-1].get("url"),
-        })
-
-    return jsonify(results[:10])
-
-# ⬇️ DOWNLOAD WITH QUALITY
+# ---------- DOWNLOAD ----------
 @app.route("/api/download/<vid>")
 def download(vid):
     quality = request.args.get("quality", "medium")
@@ -126,7 +123,7 @@ def download(vid):
 
     path = f"{DOWNLOAD_DIR}/{vid}_{bitrate}.mp3"
 
-    ydl_opts = {
+    opts = {
         **YTDL_BASE,
         "format": "bestaudio",
         "outtmpl": path,
@@ -137,22 +134,15 @@ def download(vid):
         }]
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([vid])
 
     threading.Thread(target=auto_delete, args=(path,)).start()
     return send_file(path, as_attachment=True)
 
-# 📜 LYRICS (FROM DESCRIPTION)
-@app.route("/api/lyrics/<vid>")
-def lyrics(vid):
-    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
-        info = ydl.extract_info(vid, download=False)
-
-    return jsonify({
-        "title": info["title"],
-        "lyrics": info.get("description", "")[:4000]
-    })
-
+# =====================
+# MAIN (RENDER SAFE)
+# =====================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
