@@ -1,14 +1,16 @@
-import os, time, threading
-from flask import Flask, request, jsonify, send_file, render_template
+import os
+import time
+import threading
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import yt_dlp
 
 app = Flask(__name__)
 CORS(app)
 
-# =====================
+# ======================
 # CONFIG
-# =====================
+# ======================
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -31,23 +33,23 @@ QUALITY_MAP = {
     "veryhigh": "320"
 }
 
-# =====================
+# ======================
 # UTILS
-# =====================
+# ======================
 def auto_delete(path, delay=1200):
     time.sleep(delay)
     if os.path.exists(path):
         os.remove(path)
 
-# =====================
+# ======================
 # ROUTES
-# =====================
+# ======================
 
 @app.route("/")
 def home():
-    return "YouTube Music API Running"
+    return "YouTube Music Backend Running"
 
-# ---------- SEARCH (FIXED & SAFE) ----------
+# ---------- SEARCH ----------
 @app.route("/api/search")
 def search():
     q = request.args.get("q", "").strip()
@@ -72,6 +74,7 @@ def search():
             continue
         if v.get("_type") != "url":
             continue
+
         url = v.get("url", "")
         if "watch?v=" not in url:
             continue
@@ -80,9 +83,7 @@ def search():
 
         results.append({
             "id": vid,
-            "title": v.get("title"),
-            "artist": v.get("uploader"),
-            "thumbnail": v.get("thumbnails", [{}])[-1].get("url"),
+            "title": v.get("title", "Unknown title")
         })
 
     return jsonify(results[:10])
@@ -93,27 +94,35 @@ def stream(vid):
     if len(vid) < 8:
         return jsonify({"error": "invalid id"}), 400
 
-    with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
-        info = ydl.extract_info(
-            f"https://www.youtube.com/watch?v={vid}",
-            download=False
-        )
+    try:
+        with yt_dlp.YoutubeDL(YTDL_BASE) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={vid}",
+                download=False
+            )
 
-    audio_url = None
-    for f in info.get("formats", []):
-        if f.get("acodec") != "none" and f.get("vcodec") == "none":
-            audio_url = f.get("url")
-            break
+        if not info:
+            return jsonify({"error": "video info not available"}), 404
 
-    if not audio_url:
-        return jsonify({"error": "audio not found"}), 404
+        audio_url = None
+        for f in info.get("formats", []):
+            if f.get("acodec") != "none" and f.get("vcodec") == "none":
+                audio_url = f.get("url")
+                break
 
-    return jsonify({
-        "stream_url": audio_url,
-        "title": info.get("title"),
-        "artist": info.get("uploader"),
-        "thumbnail": info.get("thumbnail")
-    })
+        if not audio_url:
+            return jsonify({"error": "audio not found"}), 404
+
+        return jsonify({
+            "stream_url": audio_url,
+            "title": info.get("title", "Unknown"),
+            "artist": info.get("uploader", "Unknown"),
+            "thumbnail": info.get("thumbnail")
+        })
+
+    except Exception as e:
+        print("STREAM ERROR:", e)
+        return jsonify({"error": "internal server error"}), 500
 
 # ---------- DOWNLOAD ----------
 @app.route("/api/download/<vid>")
@@ -140,9 +149,9 @@ def download(vid):
     threading.Thread(target=auto_delete, args=(path,)).start()
     return send_file(path, as_attachment=True)
 
-# =====================
+# ======================
 # MAIN (RENDER SAFE)
-# =====================
+# ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
