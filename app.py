@@ -41,45 +41,43 @@ def home():
 
 # 🔍 SEARCH (MULTIPLE RESULTS)
 @app.route("/api/search")
+@app.route("/api/search")
 def search():
     q = request.args.get("q")
     if not q:
         return jsonify([])
 
+    search_url = f"https://music.youtube.com/search?q={q.replace(' ', '+')}"
+
     ydl_opts = {
         **YTDL_BASE,
-        "skip_download": True
+        "extract_flat": True,
+        "skip_download": True,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(
-            f"ytsearch10:{q}",
-            download=False
-        )
+        info = ydl.extract_info(search_url, download=False)
 
     results = []
 
     for v in info.get("entries", []):
         if not v:
             continue
+        if v.get("_type") != "url":
+            continue
+        if "watch?v=" not in v.get("url", ""):
+            continue
 
-        # ✅ STRICT FILTER (THIS FIXES ERROR)
-        if v.get("_type") != "video":
-            continue
-        if not v.get("id"):
-            continue
-        if len(v["id"]) < 8:
-            continue
+        vid = v["url"].split("watch?v=")[-1]
 
         results.append({
-            "id": v["id"],
+            "id": vid,
             "title": v.get("title"),
             "artist": v.get("uploader"),
-            "thumbnail": v.get("thumbnail"),
-            "duration": v.get("duration"),
+            "thumbnail": v.get("thumbnails", [{}])[-1].get("url"),
         })
 
-    return jsonify(results)
+    return jsonify(results[:10])
 
 # 🎧 STREAM (FAST – NO DOWNLOAD)
 @app.route("/api/search")
